@@ -1,0 +1,327 @@
+target python 
+
+preamble {=
+  import random
+
+  class Queue:
+    def __init__(self):
+        self.items = []
+    
+    def is_empty(self):
+        return len(self.items) == 0
+    
+    def enqueue(self, item):
+        if item is None:
+          print("Item is null")
+        else:
+          self.items.append(item)
+          print(f"Enqueued: {item}")
+    
+    def dequeue(self):
+        if not self.is_empty():
+            item = self.items.pop(0)
+            print(f"Dequeued: {item}")
+            return item
+        else:
+            print("Queue is empty!")
+            return -1
+    
+    def size(self):
+        return len(self.items)
+    
+    def front(self):
+        if not self.is_empty():
+            return self.items[0]
+        return -1
+    
+    def display(self):
+        if not self.is_empty():
+            print("Queue:", self.items)
+        else:
+            print("Queue is empty!")
+
+  class Moderator:
+    STATE_TIME_CONSTRAINTS = {
+      "a": 0,
+      "b": 2000,
+      "c": 2000,
+      "d": 4000,
+      "e": 4000,
+      "f": 2000,
+      "g": 2000,
+      "h": 4000,
+    }
+
+    def __init__(self, eps_ratio: float):
+        self.eps_ratio = eps_ratio
+        self.history = []
+        self.total_time = 0
+    
+    def get_time_ms_v1(self, state: str):
+      time = int(self.STATE_TIME_CONSTRAINTS[state] * random.uniform(1-self.eps_ratio, 1+self.eps_ratio))
+      self.history.append({"state": state, "x": time})
+      return time
+
+    def display_execution_table(self):
+      key_width = 7
+      value_width = 7
+      total_width = 12
+
+      separator = "+" + "-" * key_width + "+" + "-" * value_width + "+" + "-" * total_width + "+"
+
+      print("Sender Table:")
+      print(separator)
+      print("|{:<{kw}}|{:>{vw}}|{:>{tw}}|".format("states", "X", "Total Time",
+                                                    kw=key_width, vw=value_width, tw=total_width))
+      print(separator)
+
+      running_total = 0
+      for record in self.history:
+        running_total += record["x"]
+        print("|{:<{kw}}|{:>{vw}}|{:>{tw}}|".format(record["state"], record["x"], running_total,
+                                                        kw=key_width, vw=value_width, tw=total_width))
+      print(separator)
+
+  eps_ratio = 0.03
+  def get_time_ms_v2(time: int):
+    return {
+      "neg": int(time * random.uniform(1-eps_ratio, 1)),
+      "pos": int(time * random.uniform(1, 1+eps_ratio))
+    }
+=}
+
+reactor sender(datain=[0]) {
+  output out
+  logical action ac
+  logical action reaction_trigger
+  
+  reaction(startup) -> reaction_trigger {=
+    self.queue = Queue()
+    self.moderator = Moderator(0.03)
+    reaction_trigger.schedule(0)
+  =}
+
+  initial mode A {
+    reaction(reaction_trigger) -> ac {=        
+      ac.schedule(0)
+    =}
+
+    reaction(ac) -> reset(B), reaction_trigger {=
+      # Init queue
+      if self.datain:
+        
+        [self.queue.enqueue(bit) for bit in self.datain]
+        print(self.datain.clear())
+
+        # Start
+        if not self.queue.is_empty():
+          bit = self.queue.dequeue()
+          if bit == 1: # Start bit
+            print(f"Sender: Moving to state B at ({int(lf.time.logical_elapsed()/1000000)})")
+            self.moderator.get_time_ms_v1("a") # just to add <a> in report table
+            reaction_trigger.schedule(0)
+            B.set()
+      else:
+        self.moderator.display_execution_table()
+    =}
+  }
+
+  mode B {
+    reaction(reaction_trigger) -> ac {=
+      ac.schedule(MSEC(self.moderator.get_time_ms_v1("b")))
+    =}
+
+    reaction(ac) -> reset(C), reset(D), out, reaction_trigger {=
+        if not self.queue.is_empty():
+          out.set(1)
+          if self.queue.dequeue() == 1:
+            print(f"Sender: Moving to state B -> C at ({int(lf.time.logical_elapsed()/1000000)}) | Sent <1>")
+            C.set()
+            reaction_trigger.schedule(0)
+          else:
+            print(f"Sender: Moving to state B -> D at ({int(lf.time.logical_elapsed()/1000000)}) | Sent <1>")
+            D.set()
+            reaction_trigger.schedule(0)
+    =}
+  }
+
+  mode C {
+    reaction(reaction_trigger) -> ac {=
+      ac.schedule(MSEC(self.moderator.get_time_ms_v1("c")))
+    =}
+
+    reaction(ac) -> reset(B), out, reaction_trigger {=
+        out.set(0)
+        print(f"Sender: Moving to state C -> B at ({int(lf.time.logical_elapsed()/1000000)}) | Sent <0>")
+        reaction_trigger.schedule(0)
+        B.set()
+    =}
+  }
+
+  mode D {
+    reaction(reaction_trigger) -> ac {=
+      ac.schedule(MSEC(self.moderator.get_time_ms_v1("d")))
+    =}
+
+    reaction(ac) -> reset(E), reset(F), out, reaction_trigger {=
+      if not self.queue.is_empty():
+        out.set(0)
+        if self.queue.dequeue() == 1:
+          print(f"Sender: Moving to state D -> E at ({int(lf.time.logical_elapsed()/1000000)}) | Sent <0>")
+          reaction_trigger.schedule(0)
+          E.set()
+        else:
+          print(f"Sender: Moving to state D -> F at ({int(lf.time.logical_elapsed()/1000000)}) | Sent <0>")
+          reaction_trigger.schedule(0)
+          F.set()
+    =}
+  }
+
+  mode E {
+    reaction(reaction_trigger) -> ac {=
+      ac.schedule(MSEC(self.moderator.get_time_ms_v1("e")))
+    =}
+
+    reaction(ac) -> reset(C), reset(D), out, reaction_trigger {=
+      if not self.queue.is_empty():
+        out.set(1)
+        if self.queue.dequeue() == 1:
+          print(f"Sender: Moving to state E -> C at ({int(lf.time.logical_elapsed()/1000000)}) | Sent <1>")
+          reaction_trigger.schedule(0)
+          C.set()
+        else:
+          print(f"Sender: Moving to state E -> D at ({int(lf.time.logical_elapsed()/1000000)}) | Sent <1>")
+          reaction_trigger.schedule(0)
+          D.set()
+    =}
+  }
+
+  mode F {
+    reaction(reaction_trigger) -> ac {=
+      ac.schedule(MSEC(self.moderator.get_time_ms_v1("f")))
+    =}
+
+    reaction(ac) -> reset(G), out, reaction_trigger {=
+        out.set(1)
+        print(f"Sender: Moving to state F -> G at ({int(lf.time.logical_elapsed()/1000000)}) | Sent <1>")
+        reaction_trigger.schedule(0)
+        G.set()
+    =}
+  }
+
+  mode G {
+    reaction(reaction_trigger) -> ac {=
+      ac.schedule(MSEC(self.moderator.get_time_ms_v1("g")))
+    =}
+
+    reaction(ac) -> reset(E), reset(F), reset(H), out, reaction_trigger {=
+      if self.queue.is_empty():
+        out.set(0)
+        print(f"Sender: Moving to state G -> H at ({int(lf.time.logical_elapsed()/1000000)}) | Sent <0>")
+        reaction_trigger.schedule(0)
+        H.set()
+      
+      else:
+        out.set(0)
+        if self.queue.dequeue() == 1:
+          print(f"Sender: Moving to state G -> E at ({int(lf.time.logical_elapsed()/1000000)}) | Sent <0>")
+          reaction_trigger.schedule(0)
+          E.set()
+        else:
+          print(f"Sender: Moving to state G -> F at ({int(lf.time.logical_elapsed()/1000000)}) | Sent <0>")
+          reaction_trigger.schedule(0)
+          F.set()
+    =}
+  }
+
+  mode H {
+    reaction(reaction_trigger) -> ac {=
+      ac.schedule(MSEC(self.moderator.get_time_ms_v1("h")))
+    =}
+
+    reaction(ac) -> reset(A), out, reaction_trigger {=
+      print(f"Sender: Moving to state H -> A at ({int(lf.time.logical_elapsed()/1000000)})")
+      reaction_trigger.schedule(0)
+      A.set()
+    =}
+  }
+}
+
+
+reactor receiver {
+  input inp
+  state finaloutput = ""
+  state our_clock = 0
+  state pr_state = 0 # 0 for idle, 1 for last0 , 2 for last1
+  timer clock(0, 100 msec);
+
+  reaction(clock) {=
+    self.our_clock += 100
+  =}
+
+  initial mode idle {
+    reaction(inp) -> reset(last1) {=
+      if inp.is_present and inp.value == 1:
+          print(f"Reciver: Got <1> at ({int(lf.time.logical_elapsed()/1000000)}) | State: Idle | FinalOutput: {self.finaloutput}")
+          self.finaloutput += "1"
+          last1.set()
+          self.our_clock = 0
+          self.pr_state = 2
+    =}
+  }
+
+  mode last1 {
+    reaction(inp) -> reset(last0) {=
+      if inp.is_present and inp.value == 1:
+        if get_time_ms_v2(3000)["neg"] <= self.our_clock  <= get_time_ms_v2(5000)["pos"]:
+          self.finaloutput += "1"
+          print(f"Reciver: Got <1> at ({int(lf.time.logical_elapsed()/1000000)}) | y = {self.our_clock} -> 0 |  State: Last1 -> Last1 | FinalOutput: {self.finaloutput}")
+          self.our_clock = 0
+        if get_time_ms_v2(7000)["neg"] <= self.our_clock <= get_time_ms_v2(9000)["pos"]:
+          self.finaloutput += "01"
+          print(f"Reciver: Got <1> at ({int(lf.time.logical_elapsed()/1000000)}) | y = {self.our_clock} -> 0 |  State: Last1 -> Last1 | FinalOutput: {self.finaloutput}")
+          self.our_clock = 0
+        if get_time_ms_v2(5000)["neg"] <= self.our_clock <= get_time_ms_v2(7000)["pos"]:
+          self.finaloutput += "0"
+          last0.set()
+          self.pr_state = 1
+          print(f"Reciver: Got <1> at ({int(lf.time.logical_elapsed()/1000000)}) | y = {self.our_clock} -> 0 |  State: Last1 -> Last0 | FinalOutput: {self.finaloutput}")
+          self.our_clock = 0
+      elif inp.is_present and inp.value == 0:
+        print(f"Reciver: Got <0> at ({int(lf.time.logical_elapsed()/1000000)}) | y = {self.our_clock} |  State: Last1 -> Last1 | FinalOutput: {self.finaloutput}")
+    =}
+  }
+
+  mode last0 {
+    reaction(inp) -> reset(last1) {=
+
+      if inp.is_present and inp.value == 1:
+        if get_time_ms_v2(3000)["neg"] <= self.our_clock <= get_time_ms_v2(5000)["pos"]:
+          self.finaloutput += "0"
+          print(f"Reciver: Got <1> at ({int(lf.time.logical_elapsed()/1000000)}) | y = {self.our_clock} -> 0 |  State: Last0 -> Last0 | FinalOutput: {self.finaloutput}")
+          self.our_clock = 0
+        if get_time_ms_v2(5000)["neg"] <= self.our_clock <= get_time_ms_v2(7000)["pos"]:
+          self.finaloutput += "01"
+          last1.set()
+          print(f"Reciver: Got <1> at ({int(lf.time.logical_elapsed()/1000000)}) | y = {self.our_clock} -> 0 |  State: Last0 -> Last1 | FinalOutput: {self.finaloutput}")
+          self.our_clock = 0
+          self.pr_state = 2
+
+      elif inp.is_present and inp.value == 0:
+        print(f"Reciver: Got <0> at ({int(lf.time.logical_elapsed()/1000000)}) | y = {self.our_clock} |  State: Last0 -> Last0 | FinalOutput: {self.finaloutput}")
+    =}
+
+    reaction(clock) -> reset(idle) {=
+      if self.pr_state == 1 and self.our_clock >= get_time_ms_v2(7000)["neg"]:
+        self.finaloutput += "0"
+        print(f"Reciver: Got nothing, but its the end ({int(lf.time.logical_elapsed()/1000000)}) | y = {self.our_clock} |  State: Last0 -> Idle | FinalOutput: {self.finaloutput}")
+        idle.set()
+    =}
+  }
+}
+
+main reactor final {
+  s = new sender(datain = [1, 0, 0, 1, 1, 0, 1, 0, 0])
+  r = new receiver()
+  s.out -> r.inp
+}
